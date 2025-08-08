@@ -122,81 +122,275 @@ const ChordMapperApp = () => {
     }
   };
 
-  // Parser intelligente per accordi
+  // Parser musicalmente intelligente
   const autoParseToChordMap = async (text) => {
     const lines = text.split('\n').filter(line => line.trim());
     const map = { ...chordMap };
     
-    // Pattern per riconoscere accordi
-    const chordPattern = /\b([A-G](?:#|b)?(?:maj|min|m|M|\+|-|dim|aug|sus|add)?[0-9]*(?:\/[A-G](?:#|b)?)?)\b/g;
+    setProcessingStep('Analisi musicale intelligente...');
     
-    // Pattern per sezioni
-    const sectionPatterns = {
-      title: /^(?!.*:)([A-Za-z\s\-'".,!?]+)$/,
-      key: /(?:key|tonalità|chiave)[:]\s*([A-Gb#]+(?:\s*(?:maj|major|min|minor|m|M))?)/i,
-      tempo: /(?:tempo|time)[:]\s*([0-9]+\/[0-9]+|[0-9]+)/i,
-      intro: /(?:intro|introduzione)[:]\s*([^\n]+)/i,
-      verse: /(?:verse|strofa|vers)[:]\s*([^\n]+)/i,
-      chorus: /(?:chorus|ritornello|refrain|rit)[:]\s*([^\n]+)/i,
-      bridge: /(?:bridge|ponte|middle)[:]\s*([^\n]+)/i,
-      outro: /(?:outro|finale|end|coda)[:]\s*([^\n]+)/i
-    };
+    // Estrai tutti gli accordi dal testo
+    const allChords = extractAllChords(text);
+    const chordSequences = groupChordSequences(allChords, text);
     
-    let foundTitle = false;
+    // Analisi strutturale intelligente
+    const musicalAnalysis = analyzeMusicalStructure(chordSequences, text);
     
-    for (let line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      
-      // Cerca titolo (prima riga senza ':' e con lettere)
-      if (!foundTitle && sectionPatterns.title.test(trimmed) && trimmed.length > 3 && trimmed.length < 50) {
-        map.title = trimmed;
-        foundTitle = true;
-        continue;
-      }
-      
-      // Cerca altre sezioni
-      for (let [section, pattern] of Object.entries(sectionPatterns)) {
-        if (section === 'title') continue;
-        
-        const match = trimmed.match(pattern);
-        if (match) {
-          map[section] = match[1].trim();
-          break;
-        }
-      }
-      
-      // Se la riga contiene solo accordi, prova a classificarla
-      const chords = trimmed.match(chordPattern);
-      if (chords && chords.length >= 2 && trimmed.replace(/[A-Gb#mMajinorsudim+\-0-9/\s]/g, '').length < 3) {
-        if (!map.intro && (trimmed.toLowerCase().includes('intro') || lines.indexOf(line) < 3)) {
-          map.intro = trimmed;
-        } else if (!map.verse && trimmed.toLowerCase().includes('vers')) {
-          map.verse = trimmed;
-        } else if (!map.chorus && (trimmed.toLowerCase().includes('chor') || trimmed.toLowerCase().includes('rit'))) {
-          map.chorus = trimmed;
-        } else if (!map.bridge && trimmed.toLowerCase().includes('bridge')) {
-          map.bridge = trimmed;
-        } else if (!map.outro && (trimmed.toLowerCase().includes('outro') || trimmed.toLowerCase().includes('end'))) {
-          map.outro = trimmed;
-        }
-      }
-    }
+    // Estrai metadati
+    extractMetadata(lines, map);
     
-    // Genera struttura se non trovata
-    if (!map.structure) {
-      const sections = [];
-      if (map.intro) sections.push('Intro');
-      if (map.verse) sections.push('A × 2');
-      if (map.chorus) sections.push('B');
-      if (map.verse && map.chorus) sections.push('A → B');
-      if (map.bridge) sections.push('Bridge → B');
-      if (map.outro) sections.push('Outro');
-      
-      map.structure = sections.join(' → ') || 'Intro → A × 2 → B → A → B → Outro';
-    }
+    // Applica l'analisi intelligente
+    map.intro = musicalAnalysis.intro || '';
+    map.verse = musicalAnalysis.verse || '';
+    map.chorus = musicalAnalysis.chorus || '';
+    map.bridge = musicalAnalysis.bridge || '';
+    map.outro = musicalAnalysis.outro || '';
+    map.structure = musicalAnalysis.structure || 'Intro → A × 2 → B → A → B → Bridge → B × 2 → Outro';
     
     setChordMap(map);
+  };
+
+  // Estrazione accordi migliorata
+  const extractAllChords = (text) => {
+    // Pattern più sofisticato per accordi
+    const chordPattern = /\b([A-G](?:#|b|♯|♭)?(?:maj|min|m|M|\+|-|dim|aug|sus|add|°|ø)?[0-9]*(?:\/[A-G](?:#|b|♯|♭)?)?)\b/g;
+    const chords = [];
+    let match;
+    
+    while ((match = chordPattern.exec(text)) !== null) {
+      chords.push({
+        chord: match[1],
+        position: match.index,
+        context: text.substring(Math.max(0, match.index - 20), match.index + 20)
+      });
+    }
+    
+    return chords;
+  };
+
+  // Raggruppa accordi in sequenze logiche
+  const groupChordSequences = (chords, text) => {
+    const lines = text.split('\n');
+    const sequences = [];
+    
+    lines.forEach((line, lineIndex) => {
+      const lineChords = chords.filter(c => 
+        text.split('\n').slice(0, lineIndex + 1).join('\n').length >= c.position &&
+        text.split('\n').slice(0, lineIndex).join('\n').length < c.position
+      );
+      
+      if (lineChords.length >= 2) {
+        sequences.push({
+          line: lineIndex,
+          chords: lineChords.map(c => c.chord),
+          rawText: line.trim(),
+          intensity: calculateHarmonicIntensity(lineChords.map(c => c.chord))
+        });
+      }
+    });
+    
+    return sequences;
+  };
+
+  // Calcola intensità armonica
+  const calculateHarmonicIntensity = (chords) => {
+    let intensity = 0;
+    
+    chords.forEach(chord => {
+      // Accordi più complessi = maggiore intensità
+      if (chord.includes('7') || chord.includes('9') || chord.includes('11')) intensity += 2;
+      if (chord.includes('maj') || chord.includes('M')) intensity += 1;
+      if (chord.includes('min') || chord.includes('m')) intensity += 0.5;
+      if (chord.includes('dim') || chord.includes('aug')) intensity += 3;
+      if (chord.includes('/')) intensity += 1; // Inversioni
+    });
+    
+    return intensity / chords.length;
+  };
+
+  // Analisi strutturale musicale intelligente
+  const analyzeMusicalStructure = (sequences, fullText) => {
+    if (sequences.length === 0) return {};
+    
+    const analysis = {
+      intro: '',
+      verse: '',
+      chorus: '',
+      bridge: '',
+      outro: '',
+      structure: ''
+    };
+
+    // 1. INTRO: Prime sequenze (di solito più semplici)
+    const introSequences = sequences.slice(0, Math.min(3, Math.ceil(sequences.length * 0.15)));
+    if (introSequences.length > 0) {
+      analysis.intro = introSequences.map(s => s.chords.join(' - ')).join(' | ');
+    }
+
+    // 2. VERSO: Pattern che si ripete con intensità medio-bassa
+    const versePatterns = findRepeatingPatterns(sequences, 'verse');
+    if (versePatterns.length > 0) {
+      analysis.verse = `𝄆 ${versePatterns[0].chords.join(' - ')} 𝄇`;
+    }
+
+    // 3. CHORUS: Sezioni con intensità armonica più alta
+    const chorusPatterns = findRepeatingPatterns(sequences, 'chorus');
+    if (chorusPatterns.length > 0) {
+      analysis.chorus = `𝄆 ${chorusPatterns[0].chords.join(' - ')} 𝄇`;
+    }
+
+    // 4. BRIDGE: Sezione contrastante (di solito verso il centro)
+    const bridgeSection = findBridgeSection(sequences);
+    if (bridgeSection) {
+      analysis.bridge = bridgeSection.chords.join(' - ');
+    }
+
+    // 5. OUTRO: Ultime sequenze
+    const outroSequences = sequences.slice(-Math.min(2, Math.ceil(sequences.length * 0.1)));
+    if (outroSequences.length > 0) {
+      analysis.outro = outroSequences.map(s => s.chords.join(' - ')).join(' | ');
+    }
+
+    // Genera struttura intelligente
+    analysis.structure = generateIntelligentStructure(analysis, sequences.length);
+
+    return analysis;
+  };
+
+  // Trova pattern ripetuti
+  const findRepeatingPatterns = (sequences, type) => {
+    const patterns = [];
+    const minRepeats = 2;
+    
+    for (let i = 0; i < sequences.length - 1; i++) {
+      for (let j = i + 1; j < sequences.length; j++) {
+        const seq1 = sequences[i];
+        const seq2 = sequences[j];
+        
+        // Controlla similarità armonica
+        if (areSimilarChordSequences(seq1.chords, seq2.chords)) {
+          // Filtra per tipo (verse = intensità bassa, chorus = alta)
+          if (type === 'verse' && seq1.intensity < 1.5) {
+            patterns.push(seq1);
+            break;
+          } else if (type === 'chorus' && seq1.intensity >= 1.5) {
+            patterns.push(seq1);
+            break;
+          }
+        }
+      }
+    }
+    
+    return patterns.slice(0, 1); // Ritorna il primo pattern trovato
+  };
+
+  // Controlla similarità tra sequenze di accordi
+  const areSimilarChordSequences = (chords1, chords2) => {
+    if (Math.abs(chords1.length - chords2.length) > 2) return false;
+    
+    let matches = 0;
+    const minLength = Math.min(chords1.length, chords2.length);
+    
+    for (let i = 0; i < minLength; i++) {
+      if (chords1[i] === chords2[i] || 
+          normalizeChord(chords1[i]) === normalizeChord(chords2[i])) {
+        matches++;
+      }
+    }
+    
+    return matches / minLength >= 0.6; // 60% di similarità
+  };
+
+  // Normalizza accordi per confronto
+  const normalizeChord = (chord) => {
+    return chord.replace(/maj|M/, '').replace(/min|m/, 'm').replace(/7|9|11|13/, '');
+  };
+
+  // Trova sezione bridge
+  const findBridgeSection = (sequences) => {
+    const middleStart = Math.floor(sequences.length * 0.4);
+    const middleEnd = Math.floor(sequences.length * 0.7);
+    const middleSequences = sequences.slice(middleStart, middleEnd);
+    
+    // Cerca la sezione più diversa armonicamente
+    let mostUnique = null;
+    let maxUniqueness = 0;
+    
+    middleSequences.forEach(seq => {
+      let uniqueness = calculateUniqueness(seq, sequences);
+      if (uniqueness > maxUniqueness) {
+        maxUniqueness = uniqueness;
+        mostUnique = seq;
+      }
+    });
+    
+    return mostUnique;
+  };
+
+  // Calcola unicità di una sezione
+  const calculateUniqueness = (targetSeq, allSequences) => {
+    let uniqueness = 0;
+    
+    allSequences.forEach(seq => {
+      if (seq !== targetSeq) {
+        const similarity = areSimilarChordSequences(targetSeq.chords, seq.chords) ? 1 : 0;
+        uniqueness += (1 - similarity);
+      }
+    });
+    
+    return uniqueness / (allSequences.length - 1);
+  };
+
+  // Estrae metadati (titolo, tonalità, tempo)
+  const extractMetadata = (lines, map) => {
+    let foundTitle = false;
+    
+    lines.forEach((line, index) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      
+      // Titolo (prima riga significativa)
+      if (!foundTitle && index < 5 && /^[A-Za-z\s\-'".,!?]+$/.test(trimmed) && 
+          trimmed.length > 3 && trimmed.length < 50 && !trimmed.includes('=')) {
+        map.title = trimmed;
+        foundTitle = true;
+        return;
+      }
+      
+      // Tempo
+      const tempoMatch = trimmed.match(/[♩♪♫]?\s*=\s*([0-9]+)/);
+      if (tempoMatch) {
+        map.tempo = `♩ = ${tempoMatch[1]}`;
+      }
+      
+      // Tonalità (dedotta dal primo accordo significativo)
+      if (!map.key) {
+        const firstChordMatch = trimmed.match(/\b([A-G](?:#|b)?(?:maj|min|m|M)?)\b/);
+        if (firstChordMatch) {
+          const rootNote = firstChordMatch[1].replace(/maj|min|m|M/, '');
+          const quality = firstChordMatch[1].includes('min') || firstChordMatch[1].includes('m') ? ' min' : ' maj';
+          map.key = rootNote + quality;
+        }
+      }
+    });
+  };
+
+  // Genera struttura intelligente
+  const generateIntelligentStructure = (analysis, totalSequences) => {
+    const parts = [];
+    
+    if (analysis.intro) parts.push('Intro');
+    if (analysis.verse) parts.push('A');
+    if (analysis.chorus) parts.push('B');
+    
+    // Struttura tipica basata sulla lunghezza
+    if (totalSequences < 10) {
+      return 'Intro → A → B → A → B → Outro';
+    } else if (totalSequences < 20) {
+      return 'Intro → A × 2 → B → A → B → Bridge → B × 2 → Outro';
+    } else {
+      return 'Intro → A × 2 → B → A → B → Bridge → Solo → B × 3 → Outro';
+    }
   };
 
   // Salvataggio locale e Google Drive
