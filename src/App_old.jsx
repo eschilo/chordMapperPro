@@ -2,7 +2,6 @@ import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Upload, Download, Save, Edit3, Music, FileText, Trash2, Cloud, AlertCircle, CheckCircle } from 'lucide-react';
 
 const ChordMapperApp = () => {
-  // Stati
   const [pdfFile, setPdfFile] = useState(null);
   const [extractedText, setExtractedText] = useState('');
   const [chordMap, setChordMap] = useState({
@@ -21,63 +20,37 @@ const ChordMapperApp = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [googleDriveAuth, setGoogleDriveAuth] = useState(false);
   const [processingStep, setProcessingStep] = useState('');
-  const [analysisMode, setAnalysisMode] = useState('local');
-  const [userApiKey, setUserApiKey] = useState('');
-  const [showApiSetup, setShowApiSetup] = useState(false);
   const fileInputRef = useRef(null);
 
-  // Carica dati all'avvio
+  // Carica dati salvati all'avvio
   useEffect(() => {
     const saved = localStorage.getItem('chordMaps');
     if (saved) {
       setSavedMaps(JSON.parse(saved));
     }
-    
-    const savedApiKey = localStorage.getItem('claude_api_key_encrypted');
-    if (savedApiKey) {
-      try {
-        const decrypted = atob(savedApiKey);
-        setUserApiKey(decrypted);
-      } catch (error) {
-        console.error('Errore caricamento API key:', error);
-      }
-    }
   }, []);
 
-  // Gestione API key
-  const saveApiKey = (apiKey) => {
-    if (apiKey) {
-      const encrypted = btoa(apiKey);
-      localStorage.setItem('claude_api_key_encrypted', encrypted);
-    } else {
-      localStorage.removeItem('claude_api_key_encrypted');
-    }
-  };
-
-  const handleApiKeyChange = (e) => {
-    const newKey = e.target.value;
-    setUserApiKey(newKey);
-    saveApiKey(newKey);
-  };
-
-  // OCR con Tesseract.js
+  // OCR Reale con Tesseract.js
   const performOCR = async (file) => {
     setProcessingStep('Inizializzazione OCR...');
     
     try {
+      // Importa Tesseract dinamicamente
       const Tesseract = await import('tesseract.js');
+      
       setProcessingStep('Lettura del PDF...');
       
+      // Converti PDF in immagine usando PDF.js (incluso via CDN)
       const pdfjsLib = window.pdfjsLib;
       if (!pdfjsLib) {
-        throw new Error('PDF.js non caricato. Ricarica la pagina.');
+        throw new Error('PDF.js non caricato. Aggiungi lo script nel HTML.');
       }
 
       const arrayBuffer = await file.arrayBuffer();
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
       
       let fullText = '';
-      const numPages = Math.min(pdf.numPages, 3);
+      const numPages = Math.min(pdf.numPages, 3); // Processa max 3 pagine
       
       for (let pageNum = 1; pageNum <= numPages; pageNum++) {
         setProcessingStep(`Elaborazione pagina ${pageNum}/${numPages}...`);
@@ -85,13 +58,16 @@ const ChordMapperApp = () => {
         const page = await pdf.getPage(pageNum);
         const viewport = page.getViewport({ scale: 2.0 });
         
+        // Crea canvas per rendering
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
         canvas.height = viewport.height;
         canvas.width = viewport.width;
         
+        // Renderizza pagina
         await page.render({ canvasContext: context, viewport }).promise;
         
+        // OCR sulla pagina
         const { data: { text } } = await Tesseract.recognize(canvas, 'eng+ita', {
           logger: m => {
             if (m.status === 'recognizing text') {
@@ -111,197 +87,6 @@ const ChordMapperApp = () => {
     }
   };
 
-  // Analisi locale intelligente
-  const analyzeLocally = (text) => {
-    const lines = text.split('\n').filter(line => line.trim());
-    const result = {
-      title: '',
-      key: '',
-      tempo: '4/4',
-      intro: '',
-      verse: '',
-      chorus: '',
-      bridge: '',
-      outro: '',
-      structure: ''
-    };
-    
-    const chordPattern = /\b([A-G](?:#|b)?(?:maj|min|m|M|\+|-|dim|aug|sus|add)?[0-9]*(?:\/[A-G](?:#|b)?)?)\b/g;
-    const allChords = [];
-    
-    lines.forEach((line, index) => {
-      const trimmed = line.trim();
-      
-      // Cerca titolo
-      if (!result.title && index < 3 && /^[A-Za-z\s\-'".,!?]+$/.test(trimmed) && 
-          trimmed.length > 3 && trimmed.length < 50 && !trimmed.includes('=')) {
-        result.title = trimmed;
-        return;
-      }
-      
-      // Cerca tempo
-      const tempoMatch = trimmed.match(/[♩♪♫]?\s*=\s*([0-9]+)/);
-      if (tempoMatch) {
-        result.tempo = `♩ = ${tempoMatch[1]}`;
-      }
-      
-      // Cerca accordi
-      const chords = trimmed.match(chordPattern);
-      if (chords && chords.length >= 2) {
-        const validChords = chords.filter(chord => 
-          /^[A-G]/.test(chord) && chord.length <= 8
-        );
-        
-        if (validChords.length >= 2) {
-          allChords.push({
-            line: index,
-            chords: validChords.join(' - '),
-            complexity: validChords.reduce((acc, chord) => {
-              let points = 1;
-              if (chord.includes('7') || chord.includes('9')) points += 2;
-              if (chord.includes('maj') || chord.includes('min')) points += 1;
-              if (chord.includes('/')) points += 1;
-              return acc + points;
-            }, 0)
-          });
-        }
-      }
-    });
-    
-    // Deduzione tonalità
-    if (allChords.length > 0 && !result.key) {
-      const firstChord = allChords[0].chords.split(' - ')[0];
-      const rootNote = firstChord.replace(/[^A-G#b]/g, '');
-      const quality = firstChord.includes('min') || firstChord.includes('m') ? ' minor' : ' major';
-      result.key = rootNote + quality;
-    }
-    
-    // Assegnazione sezioni
-    if (allChords.length > 0) {
-      result.intro = allChords.slice(0, Math.min(2, allChords.length))
-        .map(seq => seq.chords).join(' | ');
-      
-      const lowComplexity = allChords.filter(seq => seq.complexity <= 6);
-      if (lowComplexity.length > 0) {
-        result.verse = `𝄆 ${lowComplexity[0].chords} 𝄇`;
-      }
-      
-      const highComplexity = allChords.filter(seq => seq.complexity > 6);
-      if (highComplexity.length > 0) {
-        result.chorus = `𝄆 ${highComplexity[0].chords} 𝄇`;
-      } else if (allChords.length > 1) {
-        result.chorus = `𝄆 ${allChords[1].chords} 𝄇`;
-      }
-      
-      const middleIndex = Math.floor(allChords.length / 2);
-      if (allChords.length > 3 && middleIndex < allChords.length) {
-        result.bridge = allChords[middleIndex].chords;
-      }
-      
-      if (allChords.length > 2) {
-        result.outro = allChords.slice(-1)[0].chords;
-      }
-    }
-    
-    const sections = [];
-    if (result.intro) sections.push('Intro');
-    if (result.verse) sections.push('A × 2');
-    if (result.chorus) sections.push('B');
-    if (result.verse && result.chorus) sections.push('A → B');
-    if (result.bridge) sections.push('Bridge → B');
-    if (result.outro) sections.push('Outro');
-    
-    result.structure = sections.join(' → ') || 'Intro → A × 2 → B → A → B → Bridge → B × 2 → Outro';
-    
-    return result;
-  };
-
-  // Analisi con Claude API
-  const analyzeWithClaudeAPI = async (text) => {
-    if (!userApiKey || !userApiKey.startsWith('sk-ant-')) {
-      throw new Error('API key Claude non valida. Deve iniziare con sk-ant-');
-    }
-
-    setProcessingStep('Connessione a Claude AI...');
-    
-    try {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': userApiKey,
-          'anthropic-version': '2023-06-01'
-        },
-        body: JSON.stringify({
-          model: 'claude-3-sonnet-20240229',
-          max_tokens: 3000,
-          messages: [{
-            role: 'user',
-            content: `Sei un esperto musicista. Analizza questo spartito e crea una mappa degli accordi strutturata.
-
-ISTRUZIONI:
-- Identifica le sezioni: Intro, Verse (A), Chorus (B), Bridge, Outro
-- Usa simboli musicali: 𝄆 𝄇 per ripetizioni, → per sequenza, × per moltiplicazioni
-- Raggruppa accordi logicamente per sezione
-- Deduci la struttura del brano
-
-FORMATO RICHIESTA:
-- Titolo: [nome del brano]
-- Tonalità: [tonalità principale]
-- Tempo: [indicazione tempo]
-- Intro: [accordi introduzione]
-- Verse: [accordi strofa]
-- Chorus: [accordi ritornello]
-- Bridge: [accordi ponte]
-- Outro: [accordi finale]
-- Struttura: [sequenza completa del brano]
-
-SPARTITO:
-${text}`
-          }]
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(`Errore API Claude: ${errorData.error?.message || response.status}`);
-      }
-
-      const data = await response.json();
-      return data.content[0].text;
-      
-    } catch (error) {
-      console.error('Errore Claude API:', error);
-      throw error;
-    }
-  };
-
-  // Parser risultato Claude
-  const parseClaudeResponse = (claudeText) => {
-    const map = { ...chordMap };
-    
-    const patterns = {
-      title: /(?:Titolo|Title):\s*([^\n]+)/i,
-      key: /(?:Tonalità|Key|Chiave):\s*([^\n]+)/i,
-      tempo: /(?:Tempo|Time):\s*([^\n]+)/i,
-      intro: /(?:Intro|Introduzione):\s*([^\n]+)/i,
-      verse: /(?:Verse|Strofa|A):\s*([^\n]+)/i,
-      chorus: /(?:Chorus|Ritornello|B):\s*([^\n]+)/i,
-      bridge: /(?:Bridge|Ponte):\s*([^\n]+)/i,
-      outro: /(?:Outro|Finale|End):\s*([^\n]+)/i,
-      structure: /(?:Struttura|Structure):\s*([^\n]+)/i
-    };
-    
-    for (const [key, pattern] of Object.entries(patterns)) {
-      const match = claudeText.match(pattern);
-      if (match) {
-        map[key] = match[1].trim();
-      }
-    }
-    
-    return map;
-  };
-
   // Upload e processing PDF
   const handlePDFUpload = async (event) => {
     const file = event.target.files[0];
@@ -312,7 +97,7 @@ ${text}`
       return;
     }
     
-    if (file.size > 10 * 1024 * 1024) {
+    if (file.size > 10 * 1024 * 1024) { // 10MB limit
       alert('File troppo grande. Massimo 10MB');
       return;
     }
@@ -325,23 +110,7 @@ ${text}`
       const text = await performOCR(file);
       setExtractedText(text);
       setProcessingStep('Analisi del contenuto...');
-      
-      let analysisResult;
-      if (analysisMode === 'claude' && userApiKey) {
-        try {
-          const claudeResult = await analyzeWithClaudeAPI(text);
-          analysisResult = parseClaudeResponse(claudeResult);
-          setProcessingStep('Analisi Claude completata!');
-        } catch (claudeError) {
-          console.error('Errore Claude, fallback a locale:', claudeError);
-          setProcessingStep('Claude non disponibile, uso analisi locale...');
-          analysisResult = analyzeLocally(text);
-        }
-      } else {
-        analysisResult = analyzeLocally(text);
-      }
-      
-      setChordMap(analysisResult);
+      await autoParseToChordMap(text);
       setCurrentTab('edit');
       setProcessingStep('Completato!');
     } catch (error) {
@@ -353,7 +122,278 @@ ${text}`
     }
   };
 
-  // Salvataggio
+  // Parser musicalmente intelligente
+  const autoParseToChordMap = async (text) => {
+    const lines = text.split('\n').filter(line => line.trim());
+    const map = { ...chordMap };
+    
+    setProcessingStep('Analisi musicale intelligente...');
+    
+    // Estrai tutti gli accordi dal testo
+    const allChords = extractAllChords(text);
+    const chordSequences = groupChordSequences(allChords, text);
+    
+    // Analisi strutturale intelligente
+    const musicalAnalysis = analyzeMusicalStructure(chordSequences, text);
+    
+    // Estrai metadati
+    extractMetadata(lines, map);
+    
+    // Applica l'analisi intelligente
+    map.intro = musicalAnalysis.intro || '';
+    map.verse = musicalAnalysis.verse || '';
+    map.chorus = musicalAnalysis.chorus || '';
+    map.bridge = musicalAnalysis.bridge || '';
+    map.outro = musicalAnalysis.outro || '';
+    map.structure = musicalAnalysis.structure || 'Intro → A × 2 → B → A → B → Bridge → B × 2 → Outro';
+    
+    setChordMap(map);
+  };
+
+  // Estrazione accordi migliorata
+  const extractAllChords = (text) => {
+    // Pattern più sofisticato per accordi
+    const chordPattern = /\b([A-G](?:#|b|♯|♭)?(?:maj|min|m|M|\+|-|dim|aug|sus|add|°|ø)?[0-9]*(?:\/[A-G](?:#|b|♯|♭)?)?)\b/g;
+    const chords = [];
+    let match;
+    
+    while ((match = chordPattern.exec(text)) !== null) {
+      chords.push({
+        chord: match[1],
+        position: match.index,
+        context: text.substring(Math.max(0, match.index - 20), match.index + 20)
+      });
+    }
+    
+    return chords;
+  };
+
+  // Raggruppa accordi in sequenze logiche
+  const groupChordSequences = (chords, text) => {
+    const lines = text.split('\n');
+    const sequences = [];
+    
+    lines.forEach((line, lineIndex) => {
+      const lineChords = chords.filter(c => 
+        text.split('\n').slice(0, lineIndex + 1).join('\n').length >= c.position &&
+        text.split('\n').slice(0, lineIndex).join('\n').length < c.position
+      );
+      
+      if (lineChords.length >= 2) {
+        sequences.push({
+          line: lineIndex,
+          chords: lineChords.map(c => c.chord),
+          rawText: line.trim(),
+          intensity: calculateHarmonicIntensity(lineChords.map(c => c.chord))
+        });
+      }
+    });
+    
+    return sequences;
+  };
+
+  // Calcola intensità armonica
+  const calculateHarmonicIntensity = (chords) => {
+    let intensity = 0;
+    
+    chords.forEach(chord => {
+      // Accordi più complessi = maggiore intensità
+      if (chord.includes('7') || chord.includes('9') || chord.includes('11')) intensity += 2;
+      if (chord.includes('maj') || chord.includes('M')) intensity += 1;
+      if (chord.includes('min') || chord.includes('m')) intensity += 0.5;
+      if (chord.includes('dim') || chord.includes('aug')) intensity += 3;
+      if (chord.includes('/')) intensity += 1; // Inversioni
+    });
+    
+    return intensity / chords.length;
+  };
+
+  // Analisi strutturale musicale intelligente
+  const analyzeMusicalStructure = (sequences, fullText) => {
+    if (sequences.length === 0) return {};
+    
+    const analysis = {
+      intro: '',
+      verse: '',
+      chorus: '',
+      bridge: '',
+      outro: '',
+      structure: ''
+    };
+
+    // 1. INTRO: Prime sequenze (di solito più semplici)
+    const introSequences = sequences.slice(0, Math.min(3, Math.ceil(sequences.length * 0.15)));
+    if (introSequences.length > 0) {
+      analysis.intro = introSequences.map(s => s.chords.join(' - ')).join(' | ');
+    }
+
+    // 2. VERSO: Pattern che si ripete con intensità medio-bassa
+    const versePatterns = findRepeatingPatterns(sequences, 'verse');
+    if (versePatterns.length > 0) {
+      analysis.verse = `𝄆 ${versePatterns[0].chords.join(' - ')} 𝄇`;
+    }
+
+    // 3. CHORUS: Sezioni con intensità armonica più alta
+    const chorusPatterns = findRepeatingPatterns(sequences, 'chorus');
+    if (chorusPatterns.length > 0) {
+      analysis.chorus = `𝄆 ${chorusPatterns[0].chords.join(' - ')} 𝄇`;
+    }
+
+    // 4. BRIDGE: Sezione contrastante (di solito verso il centro)
+    const bridgeSection = findBridgeSection(sequences);
+    if (bridgeSection) {
+      analysis.bridge = bridgeSection.chords.join(' - ');
+    }
+
+    // 5. OUTRO: Ultime sequenze
+    const outroSequences = sequences.slice(-Math.min(2, Math.ceil(sequences.length * 0.1)));
+    if (outroSequences.length > 0) {
+      analysis.outro = outroSequences.map(s => s.chords.join(' - ')).join(' | ');
+    }
+
+    // Genera struttura intelligente
+    analysis.structure = generateIntelligentStructure(analysis, sequences.length);
+
+    return analysis;
+  };
+
+  // Trova pattern ripetuti
+  const findRepeatingPatterns = (sequences, type) => {
+    const patterns = [];
+    const minRepeats = 2;
+    
+    for (let i = 0; i < sequences.length - 1; i++) {
+      for (let j = i + 1; j < sequences.length; j++) {
+        const seq1 = sequences[i];
+        const seq2 = sequences[j];
+        
+        // Controlla similarità armonica
+        if (areSimilarChordSequences(seq1.chords, seq2.chords)) {
+          // Filtra per tipo (verse = intensità bassa, chorus = alta)
+          if (type === 'verse' && seq1.intensity < 1.5) {
+            patterns.push(seq1);
+            break;
+          } else if (type === 'chorus' && seq1.intensity >= 1.5) {
+            patterns.push(seq1);
+            break;
+          }
+        }
+      }
+    }
+    
+    return patterns.slice(0, 1); // Ritorna il primo pattern trovato
+  };
+
+  // Controlla similarità tra sequenze di accordi
+  const areSimilarChordSequences = (chords1, chords2) => {
+    if (Math.abs(chords1.length - chords2.length) > 2) return false;
+    
+    let matches = 0;
+    const minLength = Math.min(chords1.length, chords2.length);
+    
+    for (let i = 0; i < minLength; i++) {
+      if (chords1[i] === chords2[i] || 
+          normalizeChord(chords1[i]) === normalizeChord(chords2[i])) {
+        matches++;
+      }
+    }
+    
+    return matches / minLength >= 0.6; // 60% di similarità
+  };
+
+  // Normalizza accordi per confronto
+  const normalizeChord = (chord) => {
+    return chord.replace(/maj|M/, '').replace(/min|m/, 'm').replace(/7|9|11|13/, '');
+  };
+
+  // Trova sezione bridge
+  const findBridgeSection = (sequences) => {
+    const middleStart = Math.floor(sequences.length * 0.4);
+    const middleEnd = Math.floor(sequences.length * 0.7);
+    const middleSequences = sequences.slice(middleStart, middleEnd);
+    
+    // Cerca la sezione più diversa armonicamente
+    let mostUnique = null;
+    let maxUniqueness = 0;
+    
+    middleSequences.forEach(seq => {
+      let uniqueness = calculateUniqueness(seq, sequences);
+      if (uniqueness > maxUniqueness) {
+        maxUniqueness = uniqueness;
+        mostUnique = seq;
+      }
+    });
+    
+    return mostUnique;
+  };
+
+  // Calcola unicità di una sezione
+  const calculateUniqueness = (targetSeq, allSequences) => {
+    let uniqueness = 0;
+    
+    allSequences.forEach(seq => {
+      if (seq !== targetSeq) {
+        const similarity = areSimilarChordSequences(targetSeq.chords, seq.chords) ? 1 : 0;
+        uniqueness += (1 - similarity);
+      }
+    });
+    
+    return uniqueness / (allSequences.length - 1);
+  };
+
+  // Estrae metadati (titolo, tonalità, tempo)
+  const extractMetadata = (lines, map) => {
+    let foundTitle = false;
+    
+    lines.forEach((line, index) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      
+      // Titolo (prima riga significativa)
+      if (!foundTitle && index < 5 && /^[A-Za-z\s\-'".,!?]+$/.test(trimmed) && 
+          trimmed.length > 3 && trimmed.length < 50 && !trimmed.includes('=')) {
+        map.title = trimmed;
+        foundTitle = true;
+        return;
+      }
+      
+      // Tempo
+      const tempoMatch = trimmed.match(/[♩♪♫]?\s*=\s*([0-9]+)/);
+      if (tempoMatch) {
+        map.tempo = `♩ = ${tempoMatch[1]}`;
+      }
+      
+      // Tonalità (dedotta dal primo accordo significativo)
+      if (!map.key) {
+        const firstChordMatch = trimmed.match(/\b([A-G](?:#|b)?(?:maj|min|m|M)?)\b/);
+        if (firstChordMatch) {
+          const rootNote = firstChordMatch[1].replace(/maj|min|m|M/, '');
+          const quality = firstChordMatch[1].includes('min') || firstChordMatch[1].includes('m') ? ' min' : ' maj';
+          map.key = rootNote + quality;
+        }
+      }
+    });
+  };
+
+  // Genera struttura intelligente
+  const generateIntelligentStructure = (analysis, totalSequences) => {
+    const parts = [];
+    
+    if (analysis.intro) parts.push('Intro');
+    if (analysis.verse) parts.push('A');
+    if (analysis.chorus) parts.push('B');
+    
+    // Struttura tipica basata sulla lunghezza
+    if (totalSequences < 10) {
+      return 'Intro → A → B → A → B → Outro';
+    } else if (totalSequences < 20) {
+      return 'Intro → A × 2 → B → A → B → Bridge → B × 2 → Outro';
+    } else {
+      return 'Intro → A × 2 → B → A → B → Bridge → Solo → B × 3 → Outro';
+    }
+  };
+
+  // Salvataggio locale e Google Drive
   const saveChordMap = async () => {
     if (!chordMap.title) {
       alert('Inserisci almeno il titolo del brano');
@@ -364,15 +404,46 @@ ${text}`
       ...chordMap,
       id: Date.now(),
       lastModified: new Date().toISOString(),
-      filename: `${chordMap.title.replace(/[^a-zA-Z0-9]/g, '_')}_chord_map`,
-      analysisMode: analysisMode
+      filename: `${chordMap.title.replace(/[^a-zA-Z0-9]/g, '_')}_chord_map`
     };
     
     const updatedMaps = [...savedMaps, newMap];
     setSavedMaps(updatedMaps);
+    
+    // Salva localmente
     localStorage.setItem('chordMaps', JSON.stringify(updatedMaps));
     
+    // Salva su Google Drive se autenticato
+    if (googleDriveAuth) {
+      await saveToGoogleDrive(newMap);
+    }
+    
     alert('Mappa salvata con successo!');
+  };
+
+  // Google Drive Integration (semplificata)
+  const initGoogleDrive = async () => {
+    try {
+      // Questa è una versione semplificata
+      // In produzione useresti l'API Google Drive completa
+      setGoogleDriveAuth(true);
+      alert('Connessione a Google Drive simulata (implementazione completa richiede setup OAuth)');
+    } catch (error) {
+      console.error('Errore Google Drive:', error);
+      alert('Errore connessione Google Drive');
+    }
+  };
+
+  const saveToGoogleDrive = async (chordMap) => {
+    if (!googleDriveAuth) return;
+    
+    try {
+      // Simulazione salvataggio Google Drive
+      console.log('Salvando su Google Drive:', chordMap.filename);
+      // Qui implementeresti la chiamata API reale
+    } catch (error) {
+      console.error('Errore salvataggio Google Drive:', error);
+    }
   };
 
   const loadChordMap = (map) => {
@@ -399,7 +470,6 @@ ${text}`
         outro: chordMap.outro
       },
       structure: chordMap.structure,
-      analysisMode: analysisMode,
       exportDate: new Date().toISOString()
     };
     
@@ -430,16 +500,13 @@ Tempo: ${chordMap.tempo}
 
 INTRO: ${chordMap.intro}
 
-VERSE (A): ${chordMap.verse}
-CHORUS (B): ${chordMap.chorus}
+VERSE (A): 𝄆 ${chordMap.verse} 𝄇
+CHORUS (B): 𝄆 ${chordMap.chorus} 𝄇
 
 STRUTTURA: ${chordMap.structure}
 
 BRIDGE: ${chordMap.bridge}
-OUTRO: ${chordMap.outro}
-
----
-Analizzato con: ${analysisMode === 'claude' ? 'Claude AI' : 'Analisi Locale'} • Chord Mapper Pro`;
+OUTRO: ${chordMap.outro}`;
   };
 
   return (
@@ -457,25 +524,20 @@ Analizzato con: ${analysisMode === 'claude' ? 'Claude AI' : 'Analisi Locale'} �
             </div>
             
             <div className="flex items-center gap-3">
-              {/* Status Modalità */}
-              <div className="flex items-center gap-2">
-                {analysisMode === 'claude' && userApiKey ? (
-                  <div className="flex items-center gap-2 text-purple-600">
-                    <CheckCircle className="w-5 h-5" />
-                    <span className="text-sm">Claude AI</span>
-                  </div>
-                ) : analysisMode === 'claude' ? (
-                  <div className="flex items-center gap-2 text-orange-600">
-                    <AlertCircle className="w-5 h-5" />
-                    <span className="text-sm">Claude (setup required)</span>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2 text-blue-600">
-                    <CheckCircle className="w-5 h-5" />
-                    <span className="text-sm">Locale</span>
-                  </div>
-                )}
-              </div>
+              {googleDriveAuth ? (
+                <div className="flex items-center gap-2 text-green-600">
+                  <CheckCircle className="w-5 h-5" />
+                  <span className="text-sm">Google Drive</span>
+                </div>
+              ) : (
+                <button
+                  onClick={initGoogleDrive}
+                  className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+                >
+                  <Cloud className="w-4 h-4" />
+                  Connetti Drive
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -507,128 +569,13 @@ Analizzato con: ${analysisMode === 'claude' ? 'Claude AI' : 'Analisi Locale'} �
             {/* Upload Tab */}
             {currentTab === 'upload' && (
               <div className="space-y-6">
-                {/* Analysis Mode Selector */}
-                <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-xl p-6 border border-blue-200">
-                  <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
-                    <Music className="w-5 h-5" />
-                    Modalità di Analisi
-                  </h3>
-                  
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {/* Modalità Locale */}
-                    <div className={`border-2 rounded-lg p-4 cursor-pointer transition-all ${
-                      analysisMode === 'local' 
-                        ? 'border-blue-500 bg-blue-50' 
-                        : 'border-gray-200 hover:border-blue-300'
-                    }`} onClick={() => setAnalysisMode('local')}>
-                      <div className="flex items-center gap-3 mb-2">
-                        <input 
-                          type="radio" 
-                          name="analysisMode" 
-                          value="local"
-                          checked={analysisMode === 'local'}
-                          onChange={() => setAnalysisMode('local')}
-                          className="text-blue-600"
-                        />
-                        <div className="text-2xl">🔧</div>
-                        <div>
-                          <h4 className="font-semibold text-gray-800">Analisi Locale</h4>
-                          <p className="text-sm text-gray-600">Veloce e sempre disponibile</p>
-                        </div>
-                      </div>
-                      <div className="text-xs text-gray-500 ml-8">
-                        ✅ Gratuita • ✅ Privacy • ✅ Offline • ⚡ Veloce<br/>
-                        📊 Accuratezza: ~80% • 🎯 Ottima per la maggior parte dei casi
-                      </div>
-                    </div>
-
-                    {/* Modalità Claude AI */}
-                    <div className={`border-2 rounded-lg p-4 cursor-pointer transition-all ${
-                      analysisMode === 'claude' 
-                        ? 'border-purple-500 bg-purple-50' 
-                        : 'border-gray-200 hover:border-purple-300'
-                    }`} onClick={() => setAnalysisMode('claude')}>
-                      <div className="flex items-center gap-3 mb-2">
-                        <input 
-                          type="radio" 
-                          name="analysisMode" 
-                          value="claude"
-                          checked={analysisMode === 'claude'}
-                          onChange={() => setAnalysisMode('claude')}
-                          className="text-purple-600"
-                        />
-                        <div className="text-2xl">🧠</div>
-                        <div>
-                          <h4 className="font-semibold text-gray-800">Claude AI</h4>
-                          <p className="text-sm text-gray-600">Qualità professionale</p>
-                        </div>
-                      </div>
-                      <div className="text-xs text-gray-500 ml-8">
-                        🎯 Accuratezza: ~95% • 🎵 Comprensione musicale avanzata<br/>
-                        🔑 Richiede la tua API key • 💰 ~€0.003 per analisi
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Claude API Setup */}
-                  {analysisMode === 'claude' && (
-                    <div className="mt-4 p-4 bg-white rounded-lg border border-purple-200">
-                      <div className="flex items-center justify-between mb-3">
-                        <h4 className="font-medium text-gray-800">🔑 Setup Claude API</h4>
-                        <button
-                          onClick={() => setShowApiSetup(!showApiSetup)}
-                          className="text-sm text-purple-600 hover:text-purple-700"
-                        >
-                          {showApiSetup ? 'Nascondi guida' : 'Mostra guida setup'}
-                        </button>
-                      </div>
-                      
-                      <div className="space-y-3">
-                        <input
-                          type="password"
-                          placeholder="sk-ant-xxxxxxxxxxxxxxxxx"
-                          value={userApiKey}
-                          onChange={handleApiKeyChange}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-purple-500 focus:border-purple-500 font-mono text-sm"
-                        />
-                        
-                        <div className="flex items-start gap-2 text-xs text-gray-600">
-                          <CheckCircle className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />
-                          <div>
-                            <strong>Privacy garantita:</strong> La tua API key rimane nel tuo browser e non viene mai inviata ai nostri server.
-                          </div>
-                        </div>
-                      </div>
-
-                      {showApiSetup && (
-                        <div className="mt-4 p-3 bg-purple-50 rounded-lg text-sm">
-                          <h5 className="font-medium text-purple-800 mb-2">📋 Come ottenere API key gratuita:</h5>
-                          <ol className="list-decimal list-inside space-y-1 text-purple-700">
-                            <li>Vai su <a href="https://console.anthropic.com" target="_blank" rel="noopener noreferrer" className="underline">console.anthropic.com</a></li>
-                            <li>Registrati con la tua email</li>
-                            <li>Dashboard → API Keys → "Create Key"</li>
-                            <li>Copia la key (inizia con sk-ant-...)</li>
-                            <li>Incolla qui sopra</li>
-                          </ol>
-                          <div className="mt-2 p-2 bg-green-100 rounded text-green-800">
-                            💰 <strong>$5 crediti gratuiti/mese</strong> = ~1600 analisi spartiti gratuite!
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-
                 <div className="border-2 border-dashed border-indigo-300 rounded-xl p-8 text-center">
                   <Upload className="w-12 h-12 text-indigo-400 mx-auto mb-4" />
                   <h3 className="text-lg font-semibold text-gray-800 mb-2">
                     Carica il tuo spartito PDF
                   </h3>
                   <p className="text-gray-600 mb-4">
-                    {analysisMode === 'claude' 
-                      ? 'Analisi AI professionale con comprensione musicale avanzata'
-                      : 'OCR automatico per estrarre accordi e creare mappe strutturate'
-                    }
+                    OCR automatico per estrarre accordi e creare mappe strutturate
                   </p>
                   <p className="text-sm text-gray-500 mb-4">
                     Formati supportati: PDF (max 10MB) • Lingue: Italiano, Inglese
@@ -642,12 +589,10 @@ Analizzato con: ${analysisMode === 'claude' ? 'Claude AI' : 'Analisi Locale'} �
                   />
                   <button
                     onClick={() => fileInputRef.current?.click()}
-                    disabled={isProcessing || (analysisMode === 'claude' && !userApiKey)}
+                    disabled={isProcessing}
                     className="bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {isProcessing ? 'Elaborazione...' : 
-                     analysisMode === 'claude' && !userApiKey ? 'Inserisci API key prima' :
-                     'Seleziona PDF'}
+                    {isProcessing ? 'Elaborazione...' : 'Seleziona PDF'}
                   </button>
                 </div>
 
@@ -818,9 +763,6 @@ Analizzato con: ${analysisMode === 'claude' ? 'Claude AI' : 'Analisi Locale'} �
                           <div className="space-y-1 text-sm text-gray-600">
                             <p>🎵 Tonalità: <span className="font-medium">{map.key || 'Non specificata'}</span></p>
                             <p>⏱️ Tempo: <span className="font-medium">{map.tempo}</span></p>
-                            <p className="text-xs text-purple-600">
-                              🤖 Analisi: {map.analysisMode === 'claude' ? 'Claude AI' : 'Locale'}
-                            </p>
                             <p className="text-xs text-gray-500">
                               💾 {new Date(map.lastModified).toLocaleDateString('it-IT', {
                                 day: 'numeric',
